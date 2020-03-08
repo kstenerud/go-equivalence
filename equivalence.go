@@ -217,7 +217,7 @@ func areMapsEquivalent(a, b reflect.Value) bool {
 	if a.Len() != b.Len() {
 		return false
 	}
-	iter := a.MapRange()
+	iter := mapRange(a)
 	for iter.Next() {
 		k := iter.Key()
 		av := iter.Value()
