@@ -2,6 +2,7 @@ package equivalence
 
 import (
 	"fmt"
+	"math/big"
 	"reflect"
 	"testing"
 )
@@ -272,6 +273,38 @@ func TestFloat64Equal(t *testing.T) {
 	assertEquivalent(t, float64(100), uint(100))
 	assertEquivalent(t, float64(100), float32(100))
 	assertEquivalent(t, float64(100), float64(100))
+}
+
+func TestBigIntEqual(t *testing.T) {
+	assertEquivalent(t, new(big.Int), big.NewInt(0))
+
+	assertEquivalent(t, big.NewInt(5), 5)
+	assertEquivalent(t, big.NewInt(-70), -70)
+	assertEquivalent(t, big.NewInt(100), 1.0e2)
+	assertEquivalent(t, big.NewInt(10000000), big.NewFloat(10000000))
+	assertEquivalent(t, big.NewInt(10000000), big.NewInt(10000000))
+
+	assertEquivalent(t, 5, big.NewInt(5))
+	assertEquivalent(t, -70, big.NewInt(-70))
+	assertEquivalent(t, 1.0e2, big.NewInt(100))
+	assertEquivalent(t, big.NewFloat(10000000), big.NewInt(10000000))
+	assertEquivalent(t, big.NewInt(10000000), big.NewInt(10000000))
+}
+
+func TestBigFloatEqual(t *testing.T) {
+	assertEquivalent(t, new(big.Float), big.NewFloat(0))
+
+	assertEquivalent(t, big.NewFloat(5), 5)
+	assertEquivalent(t, big.NewFloat(-70), -70)
+	assertEquivalent(t, big.NewFloat(1.454e100), 1.454e100)
+	assertEquivalent(t, big.NewFloat(10000000), big.NewInt(10000000))
+	assertEquivalent(t, big.NewFloat(10000000.1234), big.NewFloat(10000000.1234))
+
+	assertEquivalent(t, 5, big.NewFloat(5))
+	assertEquivalent(t, -70, big.NewFloat(-70))
+	assertEquivalent(t, 1.454e100, big.NewFloat(1.454e100))
+	assertEquivalent(t, big.NewInt(10000000), big.NewFloat(10000000))
+	assertEquivalent(t, big.NewFloat(10000000.1234), big.NewFloat(10000000.1234))
 }
 
 func TestNotEqual(t *testing.T) {

@@ -8,68 +8,43 @@
 package equivalence
 
 import (
+	"fmt"
 	"math"
+	"math/big"
 	"reflect"
+	"strconv"
 )
 
-var floatToleranceFactor = 0.0000000001
-
-func asInt(value reflect.Value) (result int64, ok bool) {
-	switch value.Kind() {
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		return value.Int(), true
-	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		uintValue := value.Uint()
-		if uintValue <= math.MaxInt64 {
-			return int64(uintValue), true
+// Test if two objects are equivalent.
+//
+// Equivalence means that they are either equal, or one can be converted to the
+// other's type without data loss and still be considered equal.
+//
+// The initial compared objects will be drilled down through pointers and
+// interfaces, and the first concrete value of each object will be used for the
+// comparison.
+//
+// The following numeric types will be converted (if an exact conversion is
+// possible) and numerically compared: int, uint, float, big.Int, big.Float
+//
+// For slices, arrays, maps, and structs, it will compare elements. Element
+// values will not be drilled down.
+//
+// NaN values are considered equivalent, regardless of actual payload.
+// Empty containers are considered equivalent, regardless of element type.
+func IsEquivalent(a, b interface{}) (isEquivalent bool) {
+	defer func() {
+		// The internal comparison functions just assume that the types are compatible,
+		// which causes panics when that's not actually the case. It's simpler
+		// to just let them panic since this also means that they cannot be equivalent.
+		if r := recover(); r != nil {
+			isEquivalent = false
 		}
-	case reflect.Float32, reflect.Float64:
-		floatValue := value.Float()
-		intValue := int64(floatValue)
-		if float64(intValue) == floatValue {
-			return intValue, true
-		}
+	}()
+	if a == nil && b == nil {
+		return true
 	}
-	return 0, false
-}
-
-func asUint(value reflect.Value) (result uint64, ok bool) {
-	switch value.Kind() {
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		intValue := value.Int()
-		if intValue >= 0 {
-			return uint64(intValue), true
-		}
-	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		return value.Uint(), true
-	case reflect.Float32, reflect.Float64:
-		floatValue := value.Float()
-		uintValue := uint64(floatValue)
-		if float64(uintValue) == floatValue {
-			return uintValue, true
-		}
-	}
-	return 0, false
-}
-
-func asFloat(value reflect.Value) (result float64, ok bool) {
-	switch value.Kind() {
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		intValue := value.Int()
-		floatValue := float64(intValue)
-		if int64(floatValue) == intValue {
-			return floatValue, true
-		}
-	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		uintValue := value.Uint()
-		floatValue := float64(uintValue)
-		if uint64(floatValue) == uintValue {
-			return floatValue, true
-		}
-	case reflect.Float32, reflect.Float64:
-		return value.Float(), true
-	}
-	return 0, false
+	return areObjectsEquivalent(reflect.ValueOf(a), reflect.ValueOf(b))
 }
 
 func getIntKeyedMapValue(aMap reflect.Value, aKey int64) reflect.Value {
@@ -229,7 +204,34 @@ func areMapsEquivalent(a, b reflect.Value) bool {
 	return true
 }
 
+var bigIntType = reflect.TypeOf(big.Int{})
+var bigFloatType = reflect.TypeOf(big.Float{})
+var bitsToDecimalDigitsTable = []int{0, 1, 1, 1, 1, 2, 2, 2, 3, 3}
+
+func bitsToDecimalDigits(bitCount int) int {
+	return (bitCount/10)*3 + bitsToDecimalDigitsTable[bitCount%10]
+}
+
+func bigFloatToString(v big.Float) string {
+	return v.Text('g', bitsToDecimalDigits(int(v.Prec())))
+}
+
+func floatToString(v float64) string {
+	return strconv.FormatFloat(v, 'g', -1, 64)
+}
+
+func areBigFloatsEquivalent(a, b reflect.Value) bool {
+	return bigFloatToString(a.Interface().(big.Float)) == bigFloatToString(b.Interface().(big.Float))
+}
+
 func areStructsEquivalent(a, b reflect.Value) bool {
+	switch a.Type() {
+	case bigIntType:
+		return isEquivalentToBigInt(a.Interface().(big.Int), b)
+	case bigFloatType:
+		return isEquivalentToBigFloat(a.Interface().(big.Float), b)
+	}
+
 	if a.NumField() != b.NumField() {
 		return false
 	}
@@ -241,37 +243,138 @@ func areStructsEquivalent(a, b reflect.Value) bool {
 	return true
 }
 
+func numericToString(v reflect.Value) string {
+	switch v.Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return strconv.FormatInt(v.Int(), 10)
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return strconv.FormatUint(v.Uint(), 10)
+	case reflect.Float32, reflect.Float64:
+		return floatToString(v.Float())
+	case reflect.Struct:
+		switch v.Type() {
+		case bigIntType:
+			val := v.Interface().(big.Int)
+			return val.String()
+		case bigFloatType:
+			val := v.Interface().(big.Float)
+			return bigFloatToString(val)
+		}
+	}
+	return fmt.Sprintf("NOT NUMERIC: %v", v)
+}
+
+func isEquivalentToBigFloat(a big.Float, b reflect.Value) bool {
+	return bigFloatToString(a) == numericToString(b)
+}
+
+func isEquivalentToBigInt(a big.Int, b reflect.Value) bool {
+	return a.String() == numericToString(b)
+}
+
+func isEquivalentToInt(a int64, b reflect.Value) bool {
+	switch b.Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return b.Int() == a
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		ub := b.Uint()
+		if ub&0x1000000000000000 != 0 {
+			return false
+		}
+		return a == int64(ub)
+	case reflect.Float32, reflect.Float64:
+		fb := b.Float()
+		return a == int64(fb) && float64(a) == fb
+	case reflect.Struct:
+		switch b.Type() {
+		case bigIntType:
+			bi := b.Interface().(big.Int)
+			return strconv.FormatInt(a, 10) == bi.String()
+		case bigFloatType:
+			return strconv.FormatInt(a, 10) == bigFloatToString(b.Interface().(big.Float))
+		}
+		return false
+	default:
+		return false
+	}
+}
+
+func isEquivalentToUint(a uint64, b reflect.Value) bool {
+	switch b.Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		ib := b.Int()
+		if ib < 0 {
+			return false
+		}
+		return a == uint64(ib)
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return a == b.Uint()
+	case reflect.Float32, reflect.Float64:
+		fb := b.Float()
+		if fb < 0 {
+			return false
+		}
+		return a == uint64(fb) && float64(a) == fb
+	case reflect.Struct:
+		switch b.Type() {
+		case bigIntType:
+			bi := b.Interface().(big.Int)
+			return strconv.FormatUint(a, 10) == bi.String()
+		case bigFloatType:
+			return strconv.FormatUint(a, 10) == bigFloatToString(b.Interface().(big.Float))
+		}
+		return false
+	default:
+		return false
+	}
+}
+
+func isEquivalentToFloat(a float64, b reflect.Value) bool {
+	switch b.Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		ib := b.Int()
+		return a == float64(ib) && int64(a) == ib
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		ub := b.Uint()
+		return a == float64(ub) && uint64(a) == ub
+	case reflect.Float32, reflect.Float64:
+		fb := b.Float()
+		if math.IsNaN(a) && math.IsNaN(fb) {
+			return true
+		}
+		return a == fb
+	case reflect.Struct:
+		switch b.Type() {
+		case bigIntType:
+			bi := b.Interface().(big.Int)
+			return floatToString(a) == bi.String()
+		case bigFloatType:
+			return floatToString(a) == bigFloatToString(b.Interface().(big.Float))
+		}
+		return false
+	default:
+		return false
+	}
+}
+
 func areObjectsEquivalent(a, b reflect.Value) bool {
-	if !a.IsValid() && !b.IsValid() {
-		// Special case: untyped nil
-		return true
+	a = drillDown(a)
+	b = drillDown(b)
+
+	if !a.IsValid() || !b.IsValid() {
+		// Special case: zero value
+		return !a.IsValid() && !b.IsValid()
 	}
 
 	switch a.Kind() {
-	case reflect.Interface, reflect.Ptr:
-		return areObjectsEquivalent(a.Elem(), b.Elem())
 	case reflect.Bool:
 		return a.Bool() == b.Bool()
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		bValue, ok := asInt(b)
-		return ok && a.Int() == bValue
+		return isEquivalentToInt(a.Int(), b)
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		bValue, ok := asUint(b)
-		return ok && a.Uint() == bValue
+		return isEquivalentToUint(a.Uint(), b)
 	case reflect.Float32, reflect.Float64:
-		bValue, ok := asFloat(b)
-		aValue := a.Float()
-		if !ok {
-			return false
-		}
-		if math.IsNaN(aValue) && math.IsNaN(bValue) {
-			return true
-		}
-		if aValue == bValue {
-			return true
-		}
-		tolerance := math.Abs(aValue * floatToleranceFactor)
-		return math.Abs(aValue-bValue) <= tolerance
+		return isEquivalentToFloat(a.Float(), b)
 	case reflect.Complex64, reflect.Complex128:
 		return a.Complex() == b.Complex()
 	case reflect.String:
@@ -296,37 +399,8 @@ func areObjectsEquivalent(a, b reflect.Value) bool {
 }
 
 func drillDown(v reflect.Value) reflect.Value {
-	for v.Kind() == reflect.Ptr || v.Kind() == reflect.Interface {
+	for v.IsValid() && (v.Kind() == reflect.Ptr || v.Kind() == reflect.Interface) {
 		v = v.Elem()
 	}
 	return v
-}
-
-// Test if two objects are equivalent.
-//
-// Equivalence means that they are either equal, or one can be converted to the
-// other's type without data loss and still be equal.
-//
-// The initial compared objects will be drilled down through pointers and
-// interfaces, and the first concrete value of each object will be used for the
-// comparison.
-//
-// For slices, arrays, maps, and structs, it will compare elements. Element
-// values will not be drilled down.
-//
-// NaN values are considered equal.
-// Empty containers are considered equal, regardless of element type.
-func IsEquivalent(a, b interface{}) (isEquivalent bool) {
-	defer func() {
-		// The internal comparison functions just assume that the types are compatible,
-		// which causes panics when that's not actually the case. It's simpler
-		// to just let them panic since this also means that they cannot be equivalent.
-		if r := recover(); r != nil {
-			isEquivalent = false
-		}
-	}()
-	if a == nil && b == nil {
-		return true
-	}
-	return areObjectsEquivalent(drillDown(reflect.ValueOf(a)), drillDown(reflect.ValueOf(b)))
 }
