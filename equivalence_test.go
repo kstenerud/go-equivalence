@@ -5,17 +5,19 @@ import (
 	"math/big"
 	"reflect"
 	"testing"
+
+	"github.com/kstenerud/go-describe"
 )
 
 func assertEquivalent(t *testing.T, a, b interface{}) {
 	if !IsEquivalent(a, b) {
-		t.Errorf("Expected %v (%v) and %v (%v) to be equivalent", a, reflect.TypeOf(a), b, reflect.TypeOf(b))
+		t.Errorf("Expected %v (%v) and %v (%v) to be equivalent", describe.D(a), reflect.TypeOf(a), describe.D(b), reflect.TypeOf(b))
 	}
 }
 
 func assertNotEquivalent(t *testing.T, a, b interface{}) {
 	if IsEquivalent(a, b) {
-		t.Errorf("Expected %v (%v) and %v (%v) to not be equivalent", a, reflect.TypeOf(a), b, reflect.TypeOf(b))
+		t.Errorf("Expected %v (%v) and %v (%v) to not be equivalent", describe.D(a), reflect.TypeOf(a), describe.D(b), reflect.TypeOf(b))
 	}
 }
 
@@ -312,6 +314,15 @@ func TestNotEqual(t *testing.T) {
 	assertNotEquivalent(t, uint(1), -1)
 	assertNotEquivalent(t, 1.1, 1)
 	assertNotEquivalent(t, 1, 1.1)
+}
+
+func TestRecursive(t *testing.T) {
+	a := make([]interface{}, 1)
+	a[0] = a
+	b := make([]interface{}, 1)
+	b[0] = b
+
+	assertEquivalent(t, a, b)
 }
 
 func TestComplex(t *testing.T) {

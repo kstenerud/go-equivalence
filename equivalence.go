@@ -13,6 +13,8 @@ import (
 	"math/big"
 	"reflect"
 	"strconv"
+
+	"github.com/kstenerud/go-duplicates"
 )
 
 // Test if two objects are equivalent.
@@ -44,7 +46,24 @@ func IsEquivalent(a, b interface{}) (isEquivalent bool) {
 	if a == nil && b == nil {
 		return true
 	}
-	return areObjectsEquivalent(reflect.ValueOf(a), reflect.ValueOf(b))
+	c := newComparator()
+	return c.areObjectsEquivalent(reflect.ValueOf(a), reflect.ValueOf(b))
+}
+
+type comparator struct {
+	aFinder duplicates.DuplicateFinder
+	bFinder duplicates.DuplicateFinder
+}
+
+func newComparator() *comparator {
+	_this := &comparator{}
+	_this.Init()
+	return _this
+}
+
+func (_this *comparator) Init() {
+	_this.aFinder.Init()
+	_this.bFinder.Init()
 }
 
 func getIntKeyedMapValue(aMap reflect.Value, aKey int64) reflect.Value {
@@ -176,19 +195,19 @@ func getMapValue(aMap reflect.Value, aKey reflect.Value) reflect.Value {
 	return initialResult
 }
 
-func areArraysOrSlicesEquivalent(a, b reflect.Value) bool {
+func (_this *comparator) areArraysOrSlicesEquivalent(a, b reflect.Value) bool {
 	if a.Len() != b.Len() {
 		return false
 	}
 	for i := 0; i < a.Len(); i++ {
-		if !areObjectsEquivalent(a.Index(i), b.Index(i)) {
+		if !_this.areObjectsEquivalent(a.Index(i), b.Index(i)) {
 			return false
 		}
 	}
 	return true
 }
 
-func areMapsEquivalent(a, b reflect.Value) bool {
+func (_this *comparator) areMapsEquivalent(a, b reflect.Value) bool {
 	if a.Len() != b.Len() {
 		return false
 	}
@@ -197,7 +216,7 @@ func areMapsEquivalent(a, b reflect.Value) bool {
 		k := iter.Key()
 		av := iter.Value()
 		bv := getMapValue(b, k)
-		if !areObjectsEquivalent(av, bv) {
+		if !_this.areObjectsEquivalent(av, bv) {
 			return false
 		}
 	}
@@ -224,7 +243,7 @@ func areBigFloatsEquivalent(a, b reflect.Value) bool {
 	return bigFloatToString(a.Interface().(big.Float)) == bigFloatToString(b.Interface().(big.Float))
 }
 
-func areStructsEquivalent(a, b reflect.Value) bool {
+func (_this *comparator) areStructsEquivalent(a, b reflect.Value) bool {
 	switch a.Type() {
 	case bigIntType:
 		return isEquivalentToBigInt(a.Interface().(big.Int), b)
@@ -236,7 +255,7 @@ func areStructsEquivalent(a, b reflect.Value) bool {
 		return false
 	}
 	for i := 0; i < a.NumField(); i++ {
-		if !areObjectsEquivalent(a.Field(i), b.Field(i)) {
+		if !_this.areObjectsEquivalent(a.Field(i), b.Field(i)) {
 			return false
 		}
 	}
@@ -357,9 +376,14 @@ func isEquivalentToFloat(a float64, b reflect.Value) bool {
 	}
 }
 
-func areObjectsEquivalent(a, b reflect.Value) bool {
-	a = drillDown(a)
-	b = drillDown(b)
+func (_this *comparator) areObjectsEquivalent(a, b reflect.Value) bool {
+	var aHasDuplicate, bHasDuplicate bool
+	a, aHasDuplicate = drillDown(&_this.aFinder, a)
+	b, bHasDuplicate = drillDown(&_this.bFinder, b)
+
+	if aHasDuplicate || bHasDuplicate {
+		return true
+	}
 
 	if !a.IsValid() || !b.IsValid() {
 		// Special case: zero value
@@ -379,12 +403,20 @@ func areObjectsEquivalent(a, b reflect.Value) bool {
 		return a.Complex() == b.Complex()
 	case reflect.String:
 		return a.Type() == b.Type() && a.String() == b.String()
-	case reflect.Array, reflect.Slice:
-		return areArraysOrSlicesEquivalent(a, b)
+	case reflect.Array:
+		return _this.areArraysOrSlicesEquivalent(a, b)
+	case reflect.Slice:
+		if hasDuplicate := _this.aFinder.RegisterPointer(a); hasDuplicate {
+			return true
+		}
+		return _this.areArraysOrSlicesEquivalent(a, b)
 	case reflect.Map:
-		return areMapsEquivalent(a, b)
+		if hasDuplicate := _this.aFinder.RegisterPointer(a); hasDuplicate {
+			return true
+		}
+		return _this.areMapsEquivalent(a, b)
 	case reflect.Struct:
-		return areStructsEquivalent(a, b)
+		return _this.areStructsEquivalent(a, b)
 	case reflect.Uintptr:
 		return a.Pointer() == b.Pointer()
 	case reflect.UnsafePointer:
@@ -398,9 +430,14 @@ func areObjectsEquivalent(a, b reflect.Value) bool {
 	}
 }
 
-func drillDown(v reflect.Value) reflect.Value {
+func drillDown(finder *duplicates.DuplicateFinder, v reflect.Value) (value reflect.Value, hasDuplicate bool) {
 	for v.IsValid() && (v.Kind() == reflect.Ptr || v.Kind() == reflect.Interface) {
+		if v.Kind() == reflect.Ptr {
+			if hasDuplicate = finder.RegisterPointer(v); hasDuplicate {
+				return v, true
+			}
+		}
 		v = v.Elem()
 	}
-	return v
+	return v, false
 }
